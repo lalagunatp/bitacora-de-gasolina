@@ -646,9 +646,9 @@ let hadDraft = false;
 async function init2(){
   procesarCola();
   // Sin señal se trabaja con la última configuración descargada
-  let deCache = false;
+  let errCfg = null;
   try { CFG = await runRetry(30000, 'getConfig'); try { localStorage.setItem(CFG_CACHE, JSON.stringify(CFG)); } catch(e){} }
-  catch(e){ try { CFG = JSON.parse(localStorage.getItem(CFG_CACHE) || 'null'); } catch(_){} deCache = true; }
+  catch(e){ try { CFG = JSON.parse(localStorage.getItem(CFG_CACHE) || 'null'); } catch(_){} errCfg = e; }
   if (CFG) {
     if (!$('usuario').value) $('usuario').value = CFG.defaults.usuario;
     if (!$('placas').value) $('placas').value = CFG.defaults.placas;
@@ -658,7 +658,8 @@ async function init2(){
     $('lnkSheet').href = CFG.sheetUrl; $('lnkFolder').href = CFG.folderUrl;
     saveDraft();
   } else $('hdr').textContent = 'Sin conexión con la hoja';
-  if (deCache) setRed(false);
+  // Distinguir "no hay señal" de "el servidor respondió con un error" (clave, configuración…)
+  if (errCfg) setRed(false, esErrorRed(errCfg) ? '' : '· ⚠ ' + (errCfg.message || errCfg));
   loadPendientes();
 }
 </script>
