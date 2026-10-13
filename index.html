@@ -14,7 +14,10 @@
   body { margin:0; min-height:100vh; display:flex; flex-direction:column; align-items:center; justify-content:center;
          gap:18px; background:#14264a; color:#fff; font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif; padding:16px; text-align:center; }
   img { width:120px; height:120px; border-radius:26px; }
-  a { background:#d61f26; color:#fff; text-decoration:none; padding:14px 26px; border-radius:10px; font-size:18px; font-weight:600; }
+  a, button { background:#d61f26; color:#fff; text-decoration:none; padding:14px 26px; border-radius:10px; font-size:18px; font-weight:600;
+              border:0; font-family:inherit; cursor:pointer; }
+  button { background:#fff; color:#14264a; }
+  [hidden] { display:none; }
   p { opacity:.75; font-size:14px; max-width:320px; }
 </style>
 </head>
@@ -22,6 +25,7 @@
   <img src="icon-192.png" alt="">
   <h1 style="margin:0;font-size:22px">Bitácora de gasolina</h1>
   <a id="go" href="#">Abrir bitácora</a>
+  <button id="instalar" hidden>📲 Instalar app</button>
   <p id="msg">Abriendo…</p>
 <script>
   // URL de la aplicación web de Apps Script (termina en /exec)
@@ -30,8 +34,32 @@
   // Abre la app directo, salvo la primera vez en el navegador (para poder "Agregar a inicio")
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
   if (standalone) location.replace(APP_URL);
-  else document.getElementById('msg').textContent =
-    'Para instalarla: menú del navegador → “Agregar a pantalla de inicio”. Después ábrela desde el ícono.';
+  else document.getElementById('msg').textContent = /iPhone|iPad|iPod/.test(navigator.userAgent)
+    ? 'Para instalarla: botón Compartir ⬆️ → “Agregar a inicio”. Después ábrela desde el ícono.'
+    : 'Para instalarla: toca “Instalar app” o menú ⋮ → “Instalar aplicación”. Después ábrela desde el ícono.';
+
+  // Botón "Instalar app" cuando el navegador (Chrome/Edge en Android) lo permite
+  let promptInstalar = null;
+  const btnInstalar = document.getElementById('instalar');
+  addEventListener('beforeinstallprompt', function (e) {
+    e.preventDefault();
+    promptInstalar = e;
+    btnInstalar.hidden = false;
+  });
+  btnInstalar.addEventListener('click', function () {
+    if (!promptInstalar) return;
+    promptInstalar.prompt();
+    promptInstalar.userChoice.finally(function () { promptInstalar = null; btnInstalar.hidden = true; });
+  });
+  addEventListener('appinstalled', function () {
+    btnInstalar.hidden = true;
+    document.getElementById('msg').textContent = 'Listo: ya está instalada. Ábrela desde el ícono.';
+  });
+
+  // PWA: el service worker es lo que hace que el navegador la ofrezca como app
+  if ('serviceWorker' in navigator) {
+    addEventListener('load', function () { navigator.serviceWorker.register('sw.js').catch(function () {}); });
+  }
 </script>
 </body>
 </html>
