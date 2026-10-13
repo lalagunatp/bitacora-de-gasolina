@@ -33,8 +33,15 @@
   document.getElementById('go').href = APP_URL;
   // Abre la app directo, salvo la primera vez en el navegador (para poder "Agregar a inicio")
   const standalone = matchMedia('(display-mode: standalone)').matches || navigator.standalone;
-  if (standalone) location.replace(APP_URL);
-  else document.getElementById('msg').textContent = /iPhone|iPad|iPod/.test(navigator.userAgent)
+  const msg = document.getElementById('msg');
+  // Sin señal no se manda a la página de error del navegador: se espera a que regrese (datos o wifi)
+  function abrir() {
+    if (navigator.onLine) { msg.textContent = 'Abriendo…'; location.replace(APP_URL); }
+    else msg.textContent = '📵 Sin señal. La bitácora se abrirá sola en cuanto haya datos o wifi.';
+  }
+  addEventListener('online', function () { if (standalone) abrir(); });
+  if (standalone) abrir();
+  else msg.textContent = /iPhone|iPad|iPod/.test(navigator.userAgent)
     ? 'Para instalarla: botón Compartir ⬆️ → “Agregar a inicio”. Después ábrela desde el ícono.'
     : 'Para instalarla: toca “Instalar app” o menú ⋮ → “Instalar aplicación”. Después ábrela desde el ícono.';
 
