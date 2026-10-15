@@ -146,11 +146,17 @@
       <div><label>Km anterior (última carga)</label><input id="kmAnterior" inputmode="numeric"></div>
       <div><label>Km actual (odómetro hoy)</label><input id="kmActual" inputmode="numeric"></div>
       <div><label>Km recorrido desde la última carga</label><input id="kmRecorridoTicket" inputmode="numeric"></div>
+      <div><label>¿Llenaste el tanque?</label>
+        <select id="tanqueLleno">
+          <option value="No">No, cargué por monto</option>
+          <option value="Sí">Sí, tanque lleno</option>
+        </select>
+      </div>
       <div><label>Rendimiento km/l</label><input id="rend" readonly></div>
     </div>
     <div class="hint" id="kmHint">Km anterior = odómetro de la última carga registrada en la hoja. Km actual = odómetro
-      ahora (foto del odómetro o el último km de tus traslados): revísalo. Recorrido = actual − anterior.
-      Rendimiento = recorrido ÷ litros de esta carga.</div>
+      ahora (foto del odómetro o el último km de tus traslados): revísalo. Recorrido = actual − anterior.</div>
+    <div class="hint" id="rendHint"></div>
     <details class="hint"><summary>Texto leído de los tickets</summary><pre id="ocrTxt"></pre></details>
   </section>
 
@@ -204,7 +210,7 @@ const $ = id => document.getElementById(id);
 const images = { ticketCar:null, ticketBomba:null, bomba:null, odometro:null };
 const DRAFT = 'bitacora-draft-v1', CFG_CACHE = 'bitacora-cfg-v1', PEND_CACHE = 'bitacora-pend-v1';
 const TEXT_FIELDS = ['usuario','placas','tipo','fechaCarga','importe','litros','precio','producto','comprobante',
-  'folioBomba','autorizacion','estacion','kmAnterior','kmActual','kmRecorridoTicket','fechaTraslado','kmInicial',
+  'folioBomba','autorizacion','estacion','kmAnterior','kmActual','kmRecorridoTicket','tanqueLleno','fechaTraslado','kmInicial',
   'kmFinal','asunto','salidaDir','salidaCoord','llegadaDir','llegadaCoord','notas'];
 let CFG = null;
 let editingId = '', savedFotos = {};
@@ -439,8 +445,26 @@ function llenarKm(){
   if (!$('kmActual').value && ult && (ant===null || ult > ant)) { setAuto('kmActual', ult); kmInicialDesdeActual(); }
   $('kmHint').textContent = (uc ? 'Última carga registrada: ' + uc.fecha.replace('T',' ') + ' · km ' + uc.km +
       (uc.litros ? ' · ' + uc.litros + ' L' : '') + '. ' : 'Aún no hay cargas con kilometraje en la hoja. ') +
-    'Revisa el km actual (odómetro). Recorrido = actual − anterior; rendimiento = recorrido ÷ litros de esta carga.';
+    'Revisa el km actual (odómetro). Recorrido = actual − anterior.';
   recalc();
+}
+// Método de tanque lleno: sólo al llenar se sabe cuánto se gastó.
+// Rendimiento = km desde el último llenado ÷ litros cargados desde entonces (cargas por monto + ésta).
+function calcRend(){
+  const lleno = $('tanqueLleno').value==='Sí', l=n($('litros').value);
+  const km = n($('kmActual').value) ?? n($('kmInicial').value);
+  const base = CFG && CFG.ultimoLleno, prev = (CFG && n(CFG.litrosDesdeLleno)) || 0;
+  let rend='', hint='';
+  if (editingId) hint = 'El rendimiento se recalcula con la hoja al guardar.';
+  else if (!lleno) hint = 'Carga por monto: el rendimiento se calcula en tu próxima carga con tanque lleno' +
+    (base ? ' (estos litros se suman a los ' + prev + ' L cargados desde el llenado del ' + base.fecha.slice(0,10) + ').' : '.');
+  else if (!base) hint = 'Primer llenado registrado: a partir de aquí, el siguiente llenado ya da rendimiento.';
+  else if (km===null || !l) hint = 'Falta km actual o litros para calcular el rendimiento.';
+  else if (km <= n(base.km)) hint = '⚠ El km actual debe ser mayor que el del último llenado (' + base.km + ').';
+  else { const tl=prev+l; rend=((km-n(base.km))/tl).toFixed(2);
+    hint = 'Rendimiento = (' + km + ' − ' + base.km + ') km desde el llenado del ' + base.fecha.slice(0,10) +
+      ' ÷ ' + (+tl.toFixed(2)) + ' L' + (prev ? ' (' + prev + ' L de cargas por monto + ' + l + ' L de hoy)' : '') + '.'; }
+  $('rend').value = rend; $('rendHint').textContent = $('tipo').value==='traslado' ? '' : hint;
 }
 // La carga se hace al salir: el odómetro de la carga es el km inicial del traslado
 function kmInicialDesdeActual(){
@@ -459,8 +483,7 @@ function recalc(){
     $('kmRecorridoTicket').classList.toggle('auto', kc>=ka);
     if (kc<ka) $('kmHint').textContent = '⚠ El km actual es menor que el de la última carga (' + ka + '): revísalo.';
   }
-  const kt=n($('kmRecorridoTicket').value), l=n($('litros').value);
-  $('rend').value = (kt && l) ? (kt/l).toFixed(2) : '';
+  calcRend();
   ['salida','llegada'].forEach(p=>{ const c=$(p+'Coord').value.trim(), a=$(p+'Map');
     if (/^-?\d+(\.\d+)?\s*,\s*-?\d+(\.\d+)?$/.test(c)) { a.href='https://www.google.com/maps?q='+encodeURIComponent(c); a.textContent='Ver en mapa ↗'; }
     else { a.removeAttribute('href'); a.textContent=''; } });
@@ -639,13 +662,17 @@ $('btnGuardar').onclick = async ()=>{
 function historialLocal(rec){
   if (!CFG) return;
   const km = n(rec.kmActual) || n(rec.kmInicial);
-  if (!rec.sinCarga && km && n(rec.importe)) CFG.ultimaCarga = { km, litros: n(rec.litros) || '', fecha: rec.fechaCarga };
+  if (!rec.sinCarga && km && n(rec.importe)) {
+    CFG.ultimaCarga = { km, litros: n(rec.litros) || '', fecha: rec.fechaCarga };
+    if (rec.tanqueLleno==='Sí') { CFG.ultimoLleno = { km, fecha: rec.fechaCarga }; CFG.litrosDesdeLleno = 0; }
+    else if (CFG.ultimoLleno) CFG.litrosDesdeLleno = +((n(CFG.litrosDesdeLleno)||0) + (n(rec.litros)||0)).toFixed(3);
+  }
   const top = Math.max(n(CFG.ultimoKm)||0, n(rec.kmFinal)||0, km||0);
   if (top) CFG.ultimoKm = top;
   try { localStorage.setItem(CFG_CACHE, JSON.stringify(CFG)); } catch(e){}
 }
 function clearForm(){
-  TEXT_FIELDS.forEach(k=>{ if(k!=='tipo') $(k).value=''; $(k).classList.remove('auto'); });
+  TEXT_FIELDS.forEach(k=>{ if(k!=='tipo') $(k).value = k==='tanqueLleno' ? 'No' : ''; $(k).classList.remove('auto'); });
   Object.keys(images).forEach(k=>images[k]=null);
   document.querySelectorAll('.ph').forEach(ph=>{ ph.classList.remove('has','saved'); const im=ph.querySelector('img'); if(im) im.remove(); ph.querySelector('input').value=''; });
   $('metodo').textContent=''; $('ocrTxt').textContent='';
