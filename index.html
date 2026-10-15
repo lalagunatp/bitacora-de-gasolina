@@ -58,7 +58,15 @@
   .hint { font-size:12px; color:var(--muted); margin-top:6px; }
   .maplink { font-size:13px; }
   #toast { position:fixed; left:50%; bottom:90px; transform:translateX(-50%); background:#222; color:#fff;
-           padding:10px 16px; border-radius:8px; font-size:14px; display:none; z-index:20; max-width:90%; }
+           padding:10px 16px; border-radius:8px; font-size:14px; display:none; z-index:40; max-width:90%; }
+  .screen { position:fixed; inset:0; background:var(--bg); z-index:25; overflow:auto; display:flex;
+            justify-content:center; align-items:flex-start; padding:48px 16px; }
+  .screen .box { background:var(--card); border-radius:12px; padding:20px; width:100%; max-width:420px;
+                 box-shadow:0 1px 4px rgba(0,0,0,.1); }
+  .screen h1 { margin:0 0 4px; font-size:20px; color:var(--brand); }
+  .screen label { margin-top:14px; }
+  .screen .big { margin-top:18px; }
+  .err { color:var(--accent); font-size:14px; margin-top:10px; min-height:1em; }
   .savebar { position:fixed; left:0; right:0; bottom:0; background:#fff; padding:10px 12px;
              box-shadow:0 -2px 8px rgba(0,0,0,.08); z-index:6; }
   .savebar div { max-width:760px; margin:0 auto; }
@@ -78,8 +86,27 @@
 <header>
   <h1>⛽ Bitácora de gasolina</h1>
   <small id="hdr">Cargando…</small> <small id="red"></small>
-  <div class="links"><a id="lnkSheet" target="_blank">Ver hoja</a><a id="lnkFolder" target="_blank">Ver evidencias</a><button id="btnClave">Clave</button><button id="btnInstalar" hidden>📲 Instalar app</button></div>
+  <div class="links"><a id="lnkSheet" target="_blank">Ver hoja</a><a id="lnkFolder" target="_blank">Ver evidencias</a><button id="btnVehiculo">Vehículo</button><button id="btnSalir">Salir</button><button id="btnInstalar" hidden>📲 Instalar app</button></div>
 </header>
+
+<div id="scrLogin" class="screen hidden"><div class="box">
+  <h1>⛽ Bitácora de gasolina</h1>
+  <div class="hint">Entra con tu número de empleado y tu NIP.</div>
+  <label for="loginNum">Número de empleado</label><input id="loginNum" inputmode="numeric" autocomplete="username">
+  <label for="loginNip">NIP</label><input id="loginNip" type="password" inputmode="numeric" autocomplete="current-password">
+  <button class="primary big" id="btnEntrar">Entrar</button>
+  <div class="err" id="loginMsg"></div>
+</div></div>
+
+<div id="scrVehiculo" class="screen hidden"><div class="box">
+  <h1>🚗 Tu vehículo</h1>
+  <div class="hint" id="vehHint">Captura la placa y la tarjeta de gasolina (o TAG). Puedes cambiarlas después en “Vehículo”.</div>
+  <label for="vehPlacas">Placa</label><input id="vehPlacas" autocapitalize="characters">
+  <label for="vehTarjeta">Tarjeta de gasolina / TAG</label><input id="vehTarjeta">
+  <button class="primary big" id="btnVehGuardar">Guardar</button>
+  <div class="row"><button id="btnVehCancelar" style="flex:1">Cancelar</button></div>
+  <div class="err" id="vehMsg"></div>
+</div></div>
 
 <main>
   <section id="secCola" class="hidden" style="border:2px solid #b26a00">
@@ -103,8 +130,8 @@
   <section>
     <h2>Vehículo y usuario</h2>
     <div class="grid">
-      <div class="full"><label>Usuario</label><input id="usuario"></div>
-      <div><label>Placas</label><input id="placas"></div>
+      <div class="full"><label>Usuario</label><input id="usuario" readonly></div>
+      <div><label>Placas (cámbialas en “Vehículo”)</label><input id="placas" readonly></div>
       <div><label>Tipo de registro</label>
         <select id="tipo">
           <option value="ambos">Carga + traslado</option>
@@ -221,26 +248,26 @@ function busy(on, txt) { $('overlay').style.display = on ? 'flex' : 'none'; if (
 // ---------- Servidor (Apps Script) ----------
 // URL de la implementación de Apps Script (termina en /exec)
 const API_URL = 'https://script.google.com/macros/s/AKfycbx5L2_GdqIRy45YhU8fvvogB9C8GtdROzRvHY9M57bs23kSYSNTJ2R7Q_P0CtmEAfIt/exec';
-const CLAVE = 'bitacora-clave';
-function getClave(pedir){
-  let c=''; try { c = localStorage.getItem(CLAVE) || ''; } catch(e){}
-  if (!c || pedir) {
-    c = (prompt('Clave de acceso de la bitácora (la que pusiste en CLAVE_APP de Apps Script):', c) || '').trim();
-    try { if (c) localStorage.setItem(CLAVE, c); } catch(e){}
-  }
-  return c;
-}
-let pidiendoClave = false;
-// text/plain evita el "preflight" CORS; Apps Script lo lee en e.postData.contents
-async function run(fn, ...args) {
+// ---------- Sesión (número de empleado + NIP) ----------
+// Queda abierta en el teléfono hasta "Salir", así la app sigue sirviendo sin señal.
+const SESION = 'bitacora-sesion-v1', ULT_NUM = 'bitacora-ultimo-num';
+let SES = null;   // { token, usuario:{ num, nombre, placas, tarjeta } }
+function leerSesion(){ try { SES = JSON.parse(localStorage.getItem(SESION) || 'null'); } catch(e){ SES = null; }
+  if (SES && !SES.token) SES = null; return SES; }
+function guardarSesion(){ try { localStorage.setItem(SESION, JSON.stringify(SES)); } catch(e){} }
+const miNum = () => SES ? SES.usuario.num : '';
+
+// text/plain evita el "preflight" CORS; Apps Script lo lee en e.postData.contents.
+// `tok` = token con el que se manda (los registros en cola llevan el de quien los capturó); null = sesión actual.
+async function call(tok, fn, args) {
+  const token = tok || (SES && SES.token) || '';
   const r = await fetch(API_URL, { method:'POST', headers:{ 'Content-Type':'text/plain;charset=utf-8' },
-    body: JSON.stringify({ fn, args, clave:getClave() }) });
+    body: JSON.stringify({ fn, args, token }) });
   const txt = await r.text();
   let j; try { j = JSON.parse(txt); }
   catch(e){ throw new Error('Respuesta inválida del servidor (revisa que la implementación tenga acceso “Cualquier usuario”)'); }
   if (!j.ok) {
-    if (j.clave && !pidiendoClave) { pidiendoClave = true; try { localStorage.removeItem(CLAVE); } catch(e){}
-      setTimeout(()=>{ getClave(true); pidiendoClave = false; init2(); }, 50); }
+    if (j.sesion && SES && token===SES.token) setTimeout(()=>cerrarSesion(true), 50);
     throw new Error(j.error || 'Error del servidor');
   }
   return j.data;
@@ -250,14 +277,15 @@ function espera(ms){ return new Promise(r=>setTimeout(r, ms)); }
 // ---------- Conexión (datos móviles o wifi) ----------
 // Con señal débil una llamada puede quedarse colgada: se corta a los `ms` y se reintenta.
 // Todo lo que se reintenta es idempotente en el servidor (fotos por `key`, registros por ID).
-function runT(ms, fn, ...args){
-  return Promise.race([run(fn, ...args),
-    espera(ms).then(()=>{ throw new Error('Tiempo de espera agotado (señal débil)'); })]);
+function conLimite(ms, p){
+  return Promise.race([p, espera(ms).then(()=>{ throw new Error('Tiempo de espera agotado (señal débil)'); })]);
 }
-async function runRetry(ms, fn, ...args){
+function runT(ms, fn, ...args){ return conLimite(ms, call(null, fn, args)); }
+function runRetry(ms, fn, ...args){ return runRetryTok(null, ms, fn, ...args); }
+async function runRetryTok(tok, ms, fn, ...args){
   const pausas=[2000, 5000, 12000];
   for (let i=0;;i++){
-    try { const r = await runT(ms, fn, ...args); setRed(true); return r; }
+    try { const r = await conLimite(ms, call(tok, fn, args)); setRed(true); return r; }
     catch(e){
       const red = esErrorRed(e);
       if (red) setRed(false);
@@ -310,7 +338,9 @@ async function encolar(rec, imgs){
   const prev = await colaGet(rec.id).catch(()=>null);
   const fotos = prev ? prev.fotos : {};
   Object.keys(imgs).forEach(k=>{ if (imgs[k]) fotos[k] = { data:imgs[k].data, key:imgs[k].key, url:'' }; });
-  const it = { id:rec.id, ver:Date.now(), creado: prev ? prev.creado : Date.now(), rec, fotos, error:'' };
+  // Se guarda con la sesión de quien lo capturó: si alguien más entra en este teléfono, se envía a nombre del correcto
+  const it = { id:rec.id, ver:Date.now(), creado: prev ? prev.creado : Date.now(), rec, fotos, error:'',
+    tok: SES.token, num: miNum(), nombre: SES.usuario.nombre };
   await colaPut(it);
   return it;
 }
@@ -320,13 +350,13 @@ async function enviar(it, prog){
   for (let i=0;i<ks.length;i++){
     const k=ks[i], f=it.fotos[k];
     if (prog) prog('Subiendo foto '+(i+1)+' de '+ks.length+'…');
-    f.url = await runRetry(90000, 'uploadPhoto', r, k, f.data, f.key);
+    f.url = await runRetryTok(it.tok, 90000, 'uploadPhoto', r, k, f.data, f.key);
     f.data = '';
     await colaMod(it.id, s=>{ const sf=s.fotos[k]; if(!sf || sf.key!==f.key) return false; sf.url=f.url; sf.data=''; }).catch(()=>{});
   }
   if (prog) prog('Guardando registro…');
   const links={}; Object.keys(it.fotos).forEach(k=>links[k]=it.fotos[k].url);
-  const res = await runRetry(60000, 'saveRecord', r, links);
+  const res = await runRetryTok(it.tok, 60000, 'saveRecord', r, links);
   // Si mientras tanto se editó este mismo registro (versión más nueva), ésa se envía después
   await colaMod(it.id, s=> s.ver===it.ver ? 'borrar' : false).catch(()=>{});
   return res;
@@ -358,7 +388,8 @@ function pintarCola(items){
     const txt=document.createElement('div'); txt.innerHTML='<b></b><br><small></small>';
     txt.querySelector('b').textContent=(r.estado==='En curso' ? '🚗 Salida: ' : '') +
       (r.asunto || (r.importe ? '$'+r.importe+' · '+r.litros+' L' : '(sin datos)')).slice(0,60);
-    txt.querySelector('small').textContent=(r.fechaCarga||r.fechaTraslado||'').replace('T',' ') +
+    txt.querySelector('small').textContent=(it.num && it.num!==miNum() ? '👤 '+(it.nombre||it.num)+' · ' : '') +
+      (r.fechaCarga||r.fechaTraslado||'').replace('T',' ') +
       ' · '+Object.keys(it.fotos).length+' foto(s)' + (it.error ? ' · último error: '+it.error.slice(0,80) : '');
     const b=document.createElement('button'); b.textContent='Descartar';
     b.onclick=async ()=>{ if(!confirm('¿Descartar este registro? NO se ha enviado a la hoja y se perderá.')) return;
@@ -395,13 +426,16 @@ function updateSaveLabel(){
   $('btnGuardar').textContent = isPendiente() ? '🚗 Guardar salida (llegada después)'
     : (editingId ? '✅ Completar registro' : '💾 Guardar en bitácora');
 }
+const colaMia = () => colaAll().catch(()=>[]).then(l=>l.filter(it=>!it.num || it.num===miNum()));
 async function loadPendientes(){
+  if (!SES) return;
   try {
     // Sin señal se usa la última lista descargada + las salidas que siguen en el teléfono
     let list;
     try { list = await runT(30000, 'getPendientes'); try { localStorage.setItem(PEND_CACHE, JSON.stringify(list)); } catch(e){} }
     catch(e){ list = JSON.parse(localStorage.getItem(PEND_CACHE) || '[]'); }
-    const cola = await colaAll().catch(()=>[]);
+    if (!SES) return;
+    const cola = await colaMia();
     const enCola = new Set(cola.map(it=>it.id));
     list = list.filter(p=>!enCola.has(p.id)).concat(cola.filter(it=>it.rec.estado==='En curso').map(it=>{
       const fotos={}; Object.keys(it.fotos).forEach(k=>fotos[k]=true);
@@ -617,6 +651,8 @@ $('btnGuardar').onclick = async ()=>{
   const errs=validate();
   if (errs.length){ toast('Falta: '+errs.join(', '), 6000); return; }
   const rec={}; TEXT_FIELDS.forEach(k=>rec[k]=$(k).value.trim());
+  rec.usuario = SES.usuario.nombre; rec.tarjeta = SES.usuario.tarjeta;
+  if (!editingId) rec.placas = SES.usuario.placas;
   rec.sinCarga = rec.tipo==='traslado';
   rec.id = editingId || nuevoId();   // el ID lo pone el celular: un reintento nunca duplica la fila
   rec.estado = isPendiente() ? 'En curso' : 'Completo';
@@ -679,10 +715,9 @@ function clearForm(){
   setEditing('', {});
 }
 function resetForm(keepUser, kmSiguiente){
-  const u=$('usuario').value, p=$('placas').value;
   const lastKm = kmSiguiente !== undefined && kmSiguiente !== null ? kmSiguiente : ($('kmFinal').value || $('kmActual').value);
   clearForm();
-  if (keepUser){ $('usuario').value=u; $('placas').value=p; }
+  aplicarUsuario();
   $('fechaCarga').value=nowLocal(); $('fechaTraslado').value=today();
   if (lastKm) { $('kmInicial').value=lastKm; $('kmInicial').classList.add('auto'); }
   $('metodo').textContent=''; $('ocrTxt').textContent='';
@@ -699,38 +734,113 @@ $('btnInstalar').onclick = ()=>{ if(!promptInstalar) return; promptInstalar.prom
 addEventListener('appinstalled', ()=>{ $('btnInstalar').hidden=true; toast('Listo: ya está instalada. Ábrela desde el ícono.'); });
 // El service worker guarda la app en el teléfono: así abre aunque no haya señal
 if ('serviceWorker' in navigator) addEventListener('load', ()=>navigator.serviceWorker.register('sw.js').catch(()=>{}));
-$('btnClave').onclick = ()=>{ if (getClave(true)) init2(); };
+// ---------- Entrada, vehículo y salida ----------
+function mostrarLogin(msg){
+  $('scrVehiculo').classList.add('hidden'); $('scrLogin').classList.remove('hidden');
+  let ult=''; try { ult = localStorage.getItem(ULT_NUM) || ''; } catch(e){}
+  if (!$('loginNum').value) $('loginNum').value = ult;
+  $('loginNip').value = ''; $('loginMsg').textContent = msg || '';
+}
+$('loginNip').addEventListener('keydown', e=>{ if (e.key==='Enter') $('btnEntrar').click(); });
+$('btnEntrar').onclick = async ()=>{
+  const num=$('loginNum').value.trim(), nip=$('loginNip').value.trim();
+  if (!num || !nip){ $('loginMsg').textContent='Escribe tu número de empleado y tu NIP.'; return; }
+  if (!navigator.onLine){ $('loginMsg').textContent='📵 Para entrar necesitas señal (datos o wifi). Después la app funciona sin señal.'; return; }
+  busy(true, 'Entrando…'); $('loginMsg').textContent='';
+  try {
+    const d = await runRetry(60000, 'login', num, nip);
+    // Lo guardado en el teléfono de otra sesión no se mezcla con ésta
+    try { [DRAFT, CFG_CACHE, PEND_CACHE].forEach(k=>localStorage.removeItem(k)); localStorage.setItem(ULT_NUM, num); } catch(e){}
+    SES = d; guardarSesion(); $('loginNip').value='';
+    $('scrLogin').classList.add('hidden');
+    entrar();
+  } catch(e){ $('loginMsg').textContent = esErrorRed(e) ? '📵 Señal débil, no se pudo entrar. Inténtalo de nuevo.' : (e.message||String(e)); }
+  busy(false);
+};
+let primeraVez = false;
+function entrar(){
+  const u = SES.usuario;
+  if (!u.placas || !u.tarjeta) mostrarVehiculo(true); else arrancar();
+}
+function mostrarVehiculo(primera){
+  primeraVez = primera;
+  $('vehPlacas').value = SES.usuario.placas || ''; $('vehTarjeta').value = SES.usuario.tarjeta || '';
+  $('vehHint').textContent = primera ? 'Hola, ' + SES.usuario.nombre + '. Antes de empezar captura la placa y la tarjeta de gasolina (o TAG). Puedes cambiarlas después en “Vehículo”.'
+    : 'Cambia la placa o la tarjeta/TAG si te asignaron otro vehículo o tarjeta. Aplica a lo que registres de aquí en adelante.';
+  $('btnVehCancelar').parentNode.classList.toggle('hidden', primera);
+  $('vehMsg').textContent = ''; $('scrVehiculo').classList.remove('hidden');
+}
+$('btnVehiculo').onclick = ()=>mostrarVehiculo(false);
+$('btnVehCancelar').onclick = ()=>$('scrVehiculo').classList.add('hidden');
+$('btnVehGuardar').onclick = async ()=>{
+  const p=$('vehPlacas').value.trim().toUpperCase(), t=$('vehTarjeta').value.trim();
+  if (!p || !t){ $('vehMsg').textContent='Captura la placa y la tarjeta/TAG.'; return; }
+  if (!navigator.onLine){ $('vehMsg').textContent='📵 Necesitas señal para guardar el vehículo.'; return; }
+  busy(true, 'Guardando…'); $('vehMsg').textContent='';
+  try {
+    SES.usuario = await runRetry(30000, 'saveVehiculo', p, t); guardarSesion();
+    $('scrVehiculo').classList.add('hidden');
+    if (primeraVez) arrancar(); else { aplicarUsuario(); saveDraft(); toast('Vehículo actualizado ✓'); }
+  } catch(e){ $('vehMsg').textContent = esErrorRed(e) ? '📵 Señal débil, no se pudo guardar. Inténtalo de nuevo.' : (e.message||String(e)); }
+  busy(false);
+};
+$('btnSalir').onclick = async ()=>{
+  const n = (await colaMia()).length;
+  if (!confirm((n ? 'Tienes ' + n + ' registro(s) sin enviar: se enviarán solos a tu hoja cuando haya señal, aunque cierres sesión.\n\n' : '') +
+    '¿Cerrar sesión? Lo capturado que no hayas guardado se borra.')) return;
+  cerrarSesion();
+};
+function cerrarSesion(invalida){
+  if (!SES) return;
+  SES = null; CFG = null;
+  try { [SESION, DRAFT, CFG_CACHE, PEND_CACHE].forEach(k=>localStorage.removeItem(k)); } catch(e){}
+  clearForm(); $('secPend').classList.add('hidden'); $('hdr').textContent = '';
+  mostrarLogin(invalida ? 'Tu sesión ya no es válida: vuelve a entrar.' : '');
+}
+// Nombre, placa y tarjeta siempre salen de la sesión
+function aplicarUsuario(){
+  if (!SES) return;
+  const u = SES.usuario;
+  $('usuario').value = u.nombre; if (!editingId) $('placas').value = u.placas;
+  $('hdr').textContent = u.nombre + ' · ' + u.placas + ' · Tarjeta/TAG ' + u.tarjeta +
+    (CFG ? ' · Lectura: ' + (CFG.ia ? 'IA' : 'OCR') : '') + (hadDraft ? ' · borrador recuperado' : '');
+}
 
 // ---------- Inicio ----------
 let hadDraft = false;
 (function init(){
+  setRed(navigator.onLine);
+  if (leerSesion()) entrar(); else mostrarLogin();
+})();
+function arrancar(){
   hadDraft = loadDraft();
+  aplicarUsuario();
   if (!$('fechaCarga').value) $('fechaCarga').value = nowLocal();
   if (!$('fechaTraslado').value) $('fechaTraslado').value = today();
-  applyTipo(); recalc(); setRed(navigator.onLine);
-  if (navigator.onLine) getClave();   // la primera vez pide la clave
+  applyTipo(); recalc();
   init2();
-})();
+}
 async function init2(){
   procesarCola();
   // Sin señal se trabaja con la última configuración descargada
   let errCfg = null;
   try {
     CFG = await runRetry(30000, 'getConfig');
+    if (!SES) return;
     // Lo que sigue en el teléfono sin enviar todavía no está en la hoja: se suma al histórico
-    (await colaAll().catch(()=>[])).forEach(it=>historialLocal(it.rec));
+    (await colaMia()).forEach(it=>historialLocal(it.rec));
     try { localStorage.setItem(CFG_CACHE, JSON.stringify(CFG)); } catch(e){}
+    // Por si cambiaron nombre, placa o tarjeta desde otro teléfono
+    SES.usuario = CFG.usuario; guardarSesion();
   }
   catch(e){ try { CFG = JSON.parse(localStorage.getItem(CFG_CACHE) || 'null'); } catch(_){} errCfg = e; }
+  if (!SES) return;
   if (CFG) {
-    if (!$('usuario').value) $('usuario').value = CFG.defaults.usuario;
-    if (!$('placas').value) $('placas').value = CFG.defaults.placas;
+    aplicarUsuario();
     if (!$('kmInicial').value && CFG.ultimoKm) { $('kmInicial').value = CFG.ultimoKm; $('kmInicial').classList.add('auto'); }
-    $('hdr').textContent = CFG.defaults.placas + ' · Tarjeta ' + CFG.defaults.tarjeta +
-      ' · Lectura: ' + (CFG.ia ? 'IA' : 'OCR') + (hadDraft ? ' · borrador recuperado' : '');
     $('lnkSheet').href = CFG.sheetUrl; $('lnkFolder').href = CFG.folderUrl;
     llenarKm(); saveDraft();
-  } else $('hdr').textContent = 'Sin conexión con la hoja';
+  } else $('hdr').textContent = SES.usuario.nombre + ' · Sin conexión con la hoja';
   // Distinguir "no hay señal" de "el servidor respondió con un error" (clave, configuración…)
   if (errCfg) setRed(false, esErrorRed(errCfg) ? '' : '· ⚠ ' + (errCfg.message || errCfg));
   loadPendientes();

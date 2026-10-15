@@ -1,7 +1,7 @@
 // Service worker: guarda la app en el teléfono para que abra aunque no haya señal.
 // Sólo toca archivos de este sitio; las llamadas a Apps Script (script.google.com) nunca pasan
 // por aquí, así que los datos jamás salen de una copia vieja.
-const CACHE_NAME = "bitacora-app-v3";
+const CACHE_NAME = "bitacora-app-v4";
 const APP_SHELL = ["./", "./index.html", "./manifest.webmanifest", "./icon-192.png", "./icon-512.png",
   "./icon-maskable-512.png", "./apple-touch-icon.png", "./favicon.png"];
 
