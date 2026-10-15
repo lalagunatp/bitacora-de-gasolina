@@ -143,11 +143,14 @@
       <div><label>Folio ticket bomba</label><input id="folioBomba"></div>
       <div><label>Autorización</label><input id="autorizacion"></div>
       <div><label>Estación</label><input id="estacion"></div>
-      <div><label>Km anterior (ticket)</label><input id="kmAnterior" inputmode="numeric"></div>
-      <div><label>Km actual (ticket)</label><input id="kmActual" inputmode="numeric"></div>
-      <div><label>Km recorrido (ticket)</label><input id="kmRecorridoTicket" inputmode="numeric"></div>
+      <div><label>Km anterior (última carga)</label><input id="kmAnterior" inputmode="numeric"></div>
+      <div><label>Km actual (odómetro hoy)</label><input id="kmActual" inputmode="numeric"></div>
+      <div><label>Km recorrido desde la última carga</label><input id="kmRecorridoTicket" inputmode="numeric"></div>
       <div><label>Rendimiento km/l</label><input id="rend" readonly></div>
     </div>
+    <div class="hint" id="kmHint">Km anterior = odómetro de la última carga registrada en la hoja. Km actual = odómetro
+      ahora (foto del odómetro o el último km de tus traslados): revísalo. Recorrido = actual − anterior.
+      Rendimiento = recorrido ÷ litros de esta carga.</div>
     <details class="hint"><summary>Texto leído de los tickets</summary><pre id="ocrTxt"></pre></details>
   </section>
 
@@ -422,14 +425,40 @@ function abrirPendiente(p){
 }
 function hasUnsaved(){ return Object.values(images).some(Boolean) || !!$('importe').value || !!$('asunto').value; }
 $('btnCancelEdit').onclick=()=>{ if(confirm('¿Cancelar la edición? Los cambios no guardados se pierden.')) resetForm(true); };
-TEXT_FIELDS.forEach(k=>$(k).addEventListener('input', ()=>{ $(k).classList.remove('auto'); recalc(); saveDraft(); }));
-$('tipo').addEventListener('change', ()=>{ applyTipo(); saveDraft(); });
+TEXT_FIELDS.forEach(k=>$(k).addEventListener('input', ()=>{ $(k).classList.remove('auto'); if (k==='kmActual') kmInicialDesdeActual(); recalc(); saveDraft(); }));
+$('tipo').addEventListener('change', ()=>{ applyTipo(); llenarKm(); saveDraft(); });
+
+// ---------- Kilometraje con el histórico de la hoja ----------
+// Km anterior = odómetro de la última carga registrada; km actual = odómetro hoy (foto del odómetro,
+// o como sugerencia el último km de los traslados, si es mayor). El recorrido y el rendimiento se calculan.
+function llenarKm(){
+  if (!CFG || $('tipo').value==='traslado' || editingId) return;
+  const uc = CFG.ultimaCarga;
+  if (uc && uc.km && !$('kmAnterior').value) setAuto('kmAnterior', uc.km);
+  const ant = n($('kmAnterior').value), ult = n(CFG.ultimoKm);
+  if (!$('kmActual').value && ult && (ant===null || ult > ant)) { setAuto('kmActual', ult); kmInicialDesdeActual(); }
+  $('kmHint').textContent = (uc ? 'Última carga registrada: ' + uc.fecha.replace('T',' ') + ' · km ' + uc.km +
+      (uc.litros ? ' · ' + uc.litros + ' L' : '') + '. ' : 'Aún no hay cargas con kilometraje en la hoja. ') +
+    'Revisa el km actual (odómetro). Recorrido = actual − anterior; rendimiento = recorrido ÷ litros de esta carga.';
+  recalc();
+}
+// La carga se hace al salir: el odómetro de la carga es el km inicial del traslado
+function kmInicialDesdeActual(){
+  const ka=$('kmActual').value;
+  if (ka && !editingId && (!$('kmInicial').value || $('kmInicial').classList.contains('auto'))) setAuto('kmInicial', ka);
+}
 
 // ---------- Cálculos ----------
 function n(v){ const x=parseFloat(String(v).replace(/[^\d.\-]/g,'')); return isNaN(x)?null:x; }
 function recalc(){
   const i=n($('kmInicial').value), f=n($('kmFinal').value);
   $('kmRec').value = (i!==null && f!==null) ? (f-i) : '';
+  const ka=n($('kmAnterior').value), kc=n($('kmActual').value);
+  if (ka!==null && kc!==null) {
+    $('kmRecorridoTicket').value = kc>=ka ? (kc-ka) : '';
+    $('kmRecorridoTicket').classList.toggle('auto', kc>=ka);
+    if (kc<ka) $('kmHint').textContent = '⚠ El km actual es menor que el de la última carga (' + ka + '): revísalo.';
+  }
   const kt=n($('kmRecorridoTicket').value), l=n($('litros').value);
   $('rend').value = (kt && l) ? (kt/l).toFixed(2) : '';
   ['salida','llegada'].forEach(p=>{ const c=$(p+'Coord').value.trim(), a=$(p+'Map');
@@ -482,15 +511,16 @@ $('btnLeer').onclick = async ()=>{
   busy(true,'Leyendo tickets…');
   try {
     const d = await runRetry(120000, 'extractTickets', imagesData());
-    if (d.fecha) { const m=/(\d{1,2})\/(\d{1,2})\/(\d{4})/.exec(d.fecha);
-      if (m) { const h=(d.hora||'12:00').slice(0,5).padStart(5,'0'); setAuto('fechaCarga', m[3]+'-'+pad(m[2])+'-'+pad(m[1])+'T'+h); } }
+    if (d.fecha) { const m=/(\d{1,2})\/(\d{1,2})\/(\d{2,4})/.exec(d.fecha);
+      if (m) { const y=m[3].length===2 ? '20'+m[3] : m[3], h=(d.hora||'12:00').slice(0,5).padStart(5,'0');
+        setAuto('fechaCarga', y+'-'+pad(m[2])+'-'+pad(m[1])+'T'+h); } }
     setAuto('importe', d.importe); setAuto('litros', d.litros); setAuto('precio', d.precio);
     setAuto('producto', d.producto); setAuto('comprobante', d.comprobante); setAuto('folioBomba', d.folioBomba);
     setAuto('autorizacion', d.autorizacion); setAuto('estacion', d.estacion);
-    setAuto('kmAnterior', d.kmAnterior); setAuto('kmActual', d.kmActual); setAuto('kmRecorridoTicket', d.kmRecorrido);
-    // La carga se hace al salir: el km del ticket/odómetro es el km inicial del traslado
-    if (!editingId && (!$('kmInicial').value || $('kmInicial').classList.contains('auto')))
-      setAuto('kmInicial', d.kmOdometro || d.kmActual);
+    // Kilometraje: lo que traiga el ticket o el odómetro; lo que falte se completa con el histórico
+    setAuto('kmAnterior', d.kmAnterior); setAuto('kmActual', d.kmOdometro || d.kmActual);
+    if (!d.kmAnterior || !(d.kmOdometro || d.kmActual)) setAuto('kmRecorridoTicket', d.kmRecorrido);
+    kmInicialDesdeActual(); llenarKm();
     if (!$('fechaTraslado').value && $('fechaCarga').value) setAuto('fechaTraslado', $('fechaCarga').value.slice(0,10));
     $('ocrTxt').textContent = [d.textoTicketCar, d.textoTicketBomba].filter(Boolean).join('\n-----\n') || JSON.stringify(d,null,2);
     $('metodo').textContent = 'Leído con ' + d.metodo + '. Los campos en amarillo se llenaron solos: revísalos.' +
@@ -576,6 +606,7 @@ $('btnGuardar').onclick = async ()=>{
   try { it = await encolar(rec, imgs); }
   catch(e){ enCola = false; it = { id:rec.id, ver:0, rec, fotos:{} };
     Object.keys(imgs).forEach(k=>{ if(imgs[k]) it.fotos[k]={ data:imgs[k].data, key:imgs[k].key, url:'' }; }); }
+  historialLocal(rec);
   // Si ya se están enviando pendientes, éste se va en la misma tanda
   if (enviandoCola && enCola) {
     toast('Guardado en el teléfono ✓ — se está enviando junto con los pendientes', 6000);
@@ -603,6 +634,16 @@ $('btnGuardar').onclick = async ()=>{
   busy(false); $('btnGuardar').disabled = false;
   procesarCola(); loadPendientes();
 };
+// Actualiza la copia local del histórico (km de la última carga, último km) sin esperar a la hoja:
+// así la siguiente carga calcula bien aunque no haya habido señal entre una y otra.
+function historialLocal(rec){
+  if (!CFG) return;
+  const km = n(rec.kmActual) || n(rec.kmInicial);
+  if (!rec.sinCarga && km && n(rec.importe)) CFG.ultimaCarga = { km, litros: n(rec.litros) || '', fecha: rec.fechaCarga };
+  const top = Math.max(n(CFG.ultimoKm)||0, n(rec.kmFinal)||0, km||0);
+  if (top) CFG.ultimoKm = top;
+  try { localStorage.setItem(CFG_CACHE, JSON.stringify(CFG)); } catch(e){}
+}
 function clearForm(){
   TEXT_FIELDS.forEach(k=>{ if(k!=='tipo') $(k).value=''; $(k).classList.remove('auto'); });
   Object.keys(images).forEach(k=>images[k]=null);
@@ -619,7 +660,7 @@ function resetForm(keepUser, kmSiguiente){
   if (lastKm) { $('kmInicial').value=lastKm; $('kmInicial').classList.add('auto'); }
   $('metodo').textContent=''; $('ocrTxt').textContent='';
   try { localStorage.removeItem(DRAFT); } catch(e){}
-  recalc(); saveDraft();
+  llenarKm(); recalc(); saveDraft();
 }
 $('btnLimpiar').onclick = ()=>{ if (confirm('¿Borrar el formulario actual?')) resetForm(true); };
 
@@ -647,7 +688,12 @@ async function init2(){
   procesarCola();
   // Sin señal se trabaja con la última configuración descargada
   let errCfg = null;
-  try { CFG = await runRetry(30000, 'getConfig'); try { localStorage.setItem(CFG_CACHE, JSON.stringify(CFG)); } catch(e){} }
+  try {
+    CFG = await runRetry(30000, 'getConfig');
+    // Lo que sigue en el teléfono sin enviar todavía no está en la hoja: se suma al histórico
+    (await colaAll().catch(()=>[])).forEach(it=>historialLocal(it.rec));
+    try { localStorage.setItem(CFG_CACHE, JSON.stringify(CFG)); } catch(e){}
+  }
   catch(e){ try { CFG = JSON.parse(localStorage.getItem(CFG_CACHE) || 'null'); } catch(_){} errCfg = e; }
   if (CFG) {
     if (!$('usuario').value) $('usuario').value = CFG.defaults.usuario;
@@ -656,7 +702,7 @@ async function init2(){
     $('hdr').textContent = CFG.defaults.placas + ' · Tarjeta ' + CFG.defaults.tarjeta +
       ' · Lectura: ' + (CFG.ia ? 'IA' : 'OCR') + (hadDraft ? ' · borrador recuperado' : '');
     $('lnkSheet').href = CFG.sheetUrl; $('lnkFolder').href = CFG.folderUrl;
-    saveDraft();
+    llenarKm(); saveDraft();
   } else $('hdr').textContent = 'Sin conexión con la hoja';
   // Distinguir "no hay señal" de "el servidor respondió con un error" (clave, configuración…)
   if (errCfg) setRed(false, esErrorRed(errCfg) ? '' : '· ⚠ ' + (errCfg.message || errCfg));
